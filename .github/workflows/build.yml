@@ -6,19 +6,13 @@ on:
       aseprite_ref:
         description: 'Aseprite 分支/标签/提交'
         required: false
-        default: 'latest'
-        type: string
-      skia_ref:
-        description: 'Skia 分支/标签'
-        required: false
-        default: 'aseprite-m82'
+        default: 'main'
         type: string
   schedule:
     - cron: '0 0 1 * *'
 
 env:
-  ASEPRITE_REPO: aseprite/aseprite
-  SKIA_REPO: aseprite/skia
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -28,162 +22,133 @@ jobs:
         include:
           - os: windows-latest
             os_name: win64
-            shell: powershell
-            cmake_generator: Ninja
-            cc: cl
-            cxx: cl
+            skia_arch: x64
+            laf_backend: skia_win32
           - os: ubuntu-latest
             os_name: linux64
-            shell: bash
-            cmake_generator: Ninja
-            cc: gcc-13
-            cxx: g++-13
+            skia_arch: x64
+            laf_backend: skia_x11
           - os: macos-14
             os_name: macos-arm64
-            shell: bash
-            cmake_generator: Ninja
-            cc: clang
-            cxx: clang++
+            skia_arch: arm64
+            laf_backend: skia_metal
 
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        shell: ${{ matrix.shell }}
+        shell: bash
 
     steps:
       - name: 检出 Aseprite 源码
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.ASEPRITE_REPO }}
-          ref: ${{ github.event.inputs.aseprite_ref || 'latest' }}
+          repository: aseprite/aseprite
+          ref: ${{ github.event.inputs.aseprite_ref || 'main' }}
           path: aseprite
           submodules: recursive
-
-      - name: 检出 Skia 源码
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.SKIA_REPO }}
-          ref: ${{ github.event.inputs.skia_ref || 'aseprite-m82' }}
-          path: skia
 
       - name: 安装依赖 (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            g++-13 \
-            ninja-build \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libharfbuzz-dev \
-            libcurl4-openssl-dev \
-            libfribidi-dev \
-            libgl1-mesa-dev \
-            libgtest-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxinerama-dev \
-            libxrandr-dev \
-            libxss-dev \
-            cmake \
-            pkg-config
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
+            libfontconfig1-dev
 
-      - name: 安装依赖 (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install ninja cmake libiconv
-
-      - name: 安装依赖 (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install ninja -y
-          echo "C:\Program Files\Ninja" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: 安装 Ninja
+        uses: aseprite/get-ninja@main
 
       - name: 配置 Visual Studio 环境 (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: 编译 Skia
-        working-directory: skia
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
+      - name: 读取 Skia 版本标签
+        id: skia_tag
+        working-directory: aseprite/laf
         run: |
-          python tools/git-sync-deps
-          ${{ runner.os == 'Windows' && 'gn gen out/Release --args="is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_libwebp_decode=true skia_use_libwebp_encode=true skia_use_sfntly=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_use_xfa=false skia_use_vulkan=false extra_cflags=[\"/MD\", \"/GR-\", \"/O2\", \"/Ob2\", \"/utf-8\"]" || true' }}
-          ${{ runner.os == 'Linux' && 'gn gen out/Release --args="is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_libwebp_decode=true skia_use_libwebp_encode=true skia_use_sfntly=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_use_xfa=false skia_use_vulkan=false skia_use_egl=true extra_cflags=[\"-O3\", \"-fno-rtti\", \"-fno-exceptions\"]" || true' }}
-          ${{ runner.os == 'macOS' && 'gn gen out/Release --args="is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_libwebp_decode=true skia_use_libwebp_encode=true skia_use_sfntly=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_use_xfa=false skia_use_vulkan=false extra_cflags=[\"-O3\", \"-fno-rtti\", \"-fno-exceptions\", \"-mmacosx-version-min=11.0\"]" || true' }}
-          ninja -C out/Release skia
+          tag=$(cat misc/skia-tag.txt | xargs)
+          echo "tag=$tag" >> $GITHUB_OUTPUT
 
-      - name: 编译 Aseprite
-        working-directory: aseprite
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
+      - name: 下载预编译 Skia
         run: |
-          cmake -S . -B build -G "${{ matrix.cmake_generator }}" \
+          tag="${{ steps.skia_tag.outputs.tag }}"
+          case "${{ runner.os }}" in
+            Windows) os=Windows ;;
+            macOS) os=macOS ;;
+            Linux) os=Linux ;;
+          esac
+          skia_url="https://github.com/aseprite/skia/releases/download/$tag/Skia-$os-Release-${{ matrix.skia_arch }}.zip"
+          echo "下载 Skia: $skia_url"
+          curl --ssl-revoke-best-effort -L -o skia.zip "$skia_url"
+          unzip -q skia.zip -d skia
+
+      - name: CMake 配置
+        working-directory: aseprite
+        run: |
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DLAF_BACKEND=${{ runner.os == 'Windows' && 'skia_win32' || runner.os == 'macOS' && 'skia_metal' || 'skia_x11' }} \
-            -DSKIA_DIR=${{ github.workspace }}/skia \
-            -DSKIA_OUT_DIR=${{ github.workspace }}/skia/out/Release \
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL \
-            -DPNG_APNG_SUPPORT=ON
-          cmake --build build --config RelWithDebInfo --parallel
+            -DENABLE_TESTS=OFF \
+            -DENABLE_SCRIPTING=ON \
+            -DENABLE_CCACHE=OFF \
+            -DLAF_BACKEND=${{ matrix.laf_backend }} \
+            -DSKIA_DIR=$(pwd)/../skia \
+            -DSKIA_LIBRARY_DIR=$(pwd)/../skia/out/Release-${{ matrix.skia_arch }}
+
+      - name: 编译
+        working-directory: aseprite
+        run: |
+          cd build && ninja
 
       - name: 打包 (Windows)
         if: runner.os == 'Windows'
-        working-directory: aseprite
+        working-directory: aseprite/build
         run: |
-          $version = (Get-Item "build/bin/aseprite.exe").VersionInfo.FileVersion
-          $dirName = "aseprite-$version-win64"
-          New-Item -ItemType Directory -Path "dist/$dirName" -Force
-          Copy-Item "build/bin/aseprite.exe" "dist/$dirName/"
-          Copy-Item "build/bin/data" "dist/$dirName/" -Recurse -ErrorAction SilentlyContinue
-          if (Test-Path "build/bin/*.dll") {
-            Copy-Item "build/bin/*.dll" "dist/$dirName/"
-          }
-          Compress-Archive -Path "dist/$dirName/*" -DestinationPath "dist/$dirName.zip"
+          version=$(strings bin/aseprite.exe | grep -oP '\d+\.\d+\.\d+' | head -1)
+          [ -z "$version" ] && version=$(date +%Y%m%d)
+          dirName="aseprite-$version-win64"
+          mkdir -p "dist/$dirName"
+          cp bin/aseprite.exe "dist/$dirName/"
+          cp -r bin/data "dist/$dirName/" 2>/dev/null || true
+          cd dist && 7z a -tzip "${dirName}.zip" "$dirName" && mv "${dirName}.zip" ../
 
       - name: 打包 (Linux)
         if: runner.os == 'Linux'
-        working-directory: aseprite
+        working-directory: aseprite/build
         run: |
-          version=$(strings build/bin/aseprite | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          dirName="aseprite-${version}-linux64"
+          version=$(strings bin/aseprite | grep -oP '\d+\.\d+\.\d+' | head -1)
+          [ -z "$version" ] && version=$(date +%Y%m%d)
+          dirName="aseprite-$version-linux64"
           mkdir -p "dist/$dirName"
-          cp build/bin/aseprite "dist/$dirName/"
-          cp -r build/bin/data "dist/$dirName/" 2>/dev/null || true
-          cd dist && tar czf "${dirName}.tar.gz" "$dirName"
+          cp bin/aseprite "dist/$dirName/"
+          cp -r bin/data "dist/$dirName/" 2>/dev/null || true
+          cd dist && tar czf "../${dirName}.tar.gz" "$dirName"
 
       - name: 打包 (macOS)
         if: runner.os == 'macOS'
-        working-directory: aseprite
+        working-directory: aseprite/build
         run: |
-          plist=$(plutil -p build/bin/Aseprite.app/Contents/Info.plist 2>/dev/null || echo "")
-          version=$(echo "$plist" | grep -o '"CFBundleShortVersionString"[[:space:]]*=>[[:space:]]*"[^"]*"' | sed 's/.*"=> "\(.*\)"/\1/')
-          [ -z "$version" ] && version=$(strings build/bin/aseprite | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          dirName="aseprite-${version}-macos-arm64"
+          version=$(plutil -p bin/Aseprite.app/Contents/Info.plist | grep -o '"CFBundleShortVersionString"[[:space:]]*=>[[:space:]]*"[^"]*"' | sed 's/.*"=> "\(.*\)"/\1/' 2>/dev/null || strings bin/aseprite | grep -oP '\d+\.\d+\.\d+' | head -1)
+          [ -z "$version" ] && version=$(date +%Y%m%d)
+          dirName="aseprite-$version-macos-arm64"
           mkdir -p "dist"
-          cp -r build/bin/Aseprite.app "dist/$dirName.app" 2>/dev/null || {
+          cp -r bin/Aseprite.app "dist/$dirName.app" 2>/dev/null || {
             mkdir -p "dist/$dirName"
-            cp build/bin/aseprite "dist/$dirName/"
-            cp -r build/bin/data "dist/$dirName/" 2>/dev/null || true
+            cp bin/aseprite "dist/$dirName/"
+            cp -r bin/data "dist/$dirName/" 2>/dev/null || true
           }
-          cd dist && zip -ry "${dirName}.zip" "$(ls | head -1)"
+          cd dist && zip -ry "../${dirName}.zip" "$(ls | head -1)"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: aseprite-${{ matrix.os_name }}
-          path: |
-            aseprite/dist/*.zip
-            aseprite/dist/*.tar.gz
+          path: aseprite/build/*.zip
           if-no-files-found: warn
 
   release:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
