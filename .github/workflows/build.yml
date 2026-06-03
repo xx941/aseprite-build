@@ -98,50 +98,33 @@ jobs:
         run: |
           cd build && ninja
 
-      - name: 打包 (Windows)
+      - name: 打包
+        working-directory: aseprite/build
+        run: |
+          pkg="${{ matrix.os_name }}"
+          mkdir -p "dist"
+          cp bin/aseprite* "dist/" 2>/dev/null || true
+          cp -r bin/data "dist/" 2>/dev/null || true
+
+      - name: 压缩打包 (Windows)
         if: runner.os == 'Windows'
         working-directory: aseprite/build
         run: |
-          version=$(strings bin/aseprite.exe | grep -oP '\d+\.\d+\.\d+' | head -1)
-          [ -z "$version" ] && version=$(date +%Y%m%d)
-          dirName="aseprite-$version-win64"
-          mkdir -p "dist/$dirName"
-          cp bin/aseprite.exe "dist/$dirName/"
-          cp -r bin/data "dist/$dirName/" 2>/dev/null || true
-          cd dist && 7z a -tzip "${dirName}.zip" "$dirName" && mv "${dirName}.zip" ../
+          cd dist && 7z a -tzip "../aseprite-${{ matrix.os_name }}.zip" ./*
 
-      - name: 打包 (Linux)
-        if: runner.os == 'Linux'
+      - name: 压缩打包 (Linux/macOS)
+        if: runner.os != 'Windows'
         working-directory: aseprite/build
         run: |
-          version=$(strings bin/aseprite | grep -oP '\d+\.\d+\.\d+' | head -1)
-          [ -z "$version" ] && version=$(date +%Y%m%d)
-          dirName="aseprite-$version-linux64"
-          mkdir -p "dist/$dirName"
-          cp bin/aseprite "dist/$dirName/"
-          cp -r bin/data "dist/$dirName/" 2>/dev/null || true
-          cd dist && tar czf "../${dirName}.tar.gz" "$dirName"
-
-      - name: 打包 (macOS)
-        if: runner.os == 'macOS'
-        working-directory: aseprite/build
-        run: |
-          version=$(plutil -p bin/Aseprite.app/Contents/Info.plist | grep -o '"CFBundleShortVersionString"[[:space:]]*=>[[:space:]]*"[^"]*"' | sed 's/.*"=> "\(.*\)"/\1/' 2>/dev/null || strings bin/aseprite | grep -oP '\d+\.\d+\.\d+' | head -1)
-          [ -z "$version" ] && version=$(date +%Y%m%d)
-          dirName="aseprite-$version-macos-arm64"
-          mkdir -p "dist"
-          cp -r bin/Aseprite.app "dist/$dirName.app" 2>/dev/null || {
-            mkdir -p "dist/$dirName"
-            cp bin/aseprite "dist/$dirName/"
-            cp -r bin/data "dist/$dirName/" 2>/dev/null || true
-          }
-          cd dist && zip -ry "../${dirName}.zip" "$(ls | head -1)"
+          cd dist && tar czf "../aseprite-${{ matrix.os_name }}.tar.gz" ./*
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: aseprite-${{ matrix.os_name }}
-          path: aseprite/build/*.zip aseprite/build/*.tar.gz
+          path: |
+            aseprite/build/aseprite-${{ matrix.os_name }}.zip
+            aseprite/build/aseprite-${{ matrix.os_name }}.tar.gz
           if-no-files-found: warn
 
   release:
