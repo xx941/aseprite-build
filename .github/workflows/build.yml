@@ -1,0 +1,205 @@
+name: Build Aseprite
+
+on:
+  workflow_dispatch:
+    inputs:
+      aseprite_ref:
+        description: 'Aseprite 分支/标签/提交'
+        required: false
+        default: 'latest'
+        type: string
+      skia_ref:
+        description: 'Skia 分支/标签'
+        required: false
+        default: 'aseprite-m82'
+        type: string
+  schedule:
+    - cron: '0 0 1 * *'
+
+env:
+  ASEPRITE_REPO: aseprite/aseprite
+  SKIA_REPO: aseprite/skia
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os_name: win64
+            shell: powershell
+            cmake_generator: Ninja
+            cc: cl
+            cxx: cl
+          - os: ubuntu-latest
+            os_name: linux64
+            shell: bash
+            cmake_generator: Ninja
+            cc: gcc-13
+            cxx: g++-13
+          - os: macos-14
+            os_name: macos-arm64
+            shell: bash
+            cmake_generator: Ninja
+            cc: clang
+            cxx: clang++
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - name: 检出 Aseprite 源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ASEPRITE_REPO }}
+          ref: ${{ github.event.inputs.aseprite_ref || 'latest' }}
+          path: aseprite
+          submodules: recursive
+
+      - name: 检出 Skia 源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SKIA_REPO }}
+          ref: ${{ github.event.inputs.skia_ref || 'aseprite-m82' }}
+          path: skia
+
+      - name: 安装依赖 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-13 \
+            ninja-build \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libharfbuzz-dev \
+            libcurl4-openssl-dev \
+            libfribidi-dev \
+            libgl1-mesa-dev \
+            libgtest-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxss-dev \
+            cmake \
+            pkg-config
+
+      - name: 安装依赖 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja cmake libiconv
+
+      - name: 安装依赖 (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja -y
+          echo "C:\Program Files\Ninja" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: 配置 Visual Studio 环境 (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: 编译 Skia
+        working-directory: skia
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          python tools/git-sync-deps
+          ${{ runner.os == 'Windows' && 'gn gen out/Release --args="is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_libwebp_decode=true skia_use_libwebp_encode=true skia_use_sfntly=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_use_xfa=false skia_use_vulkan=false extra_cflags=[\"/MD\", \"/GR-\", \"/O2\", \"/Ob2\", \"/utf-8\"]" || true' }}
+          ${{ runner.os == 'Linux' && 'gn gen out/Release --args="is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_libwebp_decode=true skia_use_libwebp_encode=true skia_use_sfntly=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_use_xfa=false skia_use_vulkan=false skia_use_egl=true extra_cflags=[\"-O3\", \"-fno-rtti\", \"-fno-exceptions\"]" || true' }}
+          ${{ runner.os == 'macOS' && 'gn gen out/Release --args="is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_libwebp_decode=true skia_use_libwebp_encode=true skia_use_sfntly=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_use_xfa=false skia_use_vulkan=false extra_cflags=[\"-O3\", \"-fno-rtti\", \"-fno-exceptions\", \"-mmacosx-version-min=11.0\"]" || true' }}
+          ninja -C out/Release skia
+
+      - name: 编译 Aseprite
+        working-directory: aseprite
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -S . -B build -G "${{ matrix.cmake_generator }}" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DLAF_BACKEND=${{ runner.os == 'Windows' && 'skia_win32' || runner.os == 'macOS' && 'skia_metal' || 'skia_x11' }} \
+            -DSKIA_DIR=${{ github.workspace }}/skia \
+            -DSKIA_OUT_DIR=${{ github.workspace }}/skia/out/Release \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL \
+            -DPNG_APNG_SUPPORT=ON
+          cmake --build build --config RelWithDebInfo --parallel
+
+      - name: 打包 (Windows)
+        if: runner.os == 'Windows'
+        working-directory: aseprite
+        run: |
+          $version = (Get-Item "build/bin/aseprite.exe").VersionInfo.FileVersion
+          $dirName = "aseprite-$version-win64"
+          New-Item -ItemType Directory -Path "dist/$dirName" -Force
+          Copy-Item "build/bin/aseprite.exe" "dist/$dirName/"
+          Copy-Item "build/bin/data" "dist/$dirName/" -Recurse -ErrorAction SilentlyContinue
+          if (Test-Path "build/bin/*.dll") {
+            Copy-Item "build/bin/*.dll" "dist/$dirName/"
+          }
+          Compress-Archive -Path "dist/$dirName/*" -DestinationPath "dist/$dirName.zip"
+
+      - name: 打包 (Linux)
+        if: runner.os == 'Linux'
+        working-directory: aseprite
+        run: |
+          version=$(strings build/bin/aseprite | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          dirName="aseprite-${version}-linux64"
+          mkdir -p "dist/$dirName"
+          cp build/bin/aseprite "dist/$dirName/"
+          cp -r build/bin/data "dist/$dirName/" 2>/dev/null || true
+          cd dist && tar czf "${dirName}.tar.gz" "$dirName"
+
+      - name: 打包 (macOS)
+        if: runner.os == 'macOS'
+        working-directory: aseprite
+        run: |
+          plist=$(plutil -p build/bin/Aseprite.app/Contents/Info.plist 2>/dev/null || echo "")
+          version=$(echo "$plist" | grep -o '"CFBundleShortVersionString"[[:space:]]*=>[[:space:]]*"[^"]*"' | sed 's/.*"=> "\(.*\)"/\1/')
+          [ -z "$version" ] && version=$(strings build/bin/aseprite | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          dirName="aseprite-${version}-macos-arm64"
+          mkdir -p "dist"
+          cp -r build/bin/Aseprite.app "dist/$dirName.app" 2>/dev/null || {
+            mkdir -p "dist/$dirName"
+            cp build/bin/aseprite "dist/$dirName/"
+            cp -r build/bin/data "dist/$dirName/" 2>/dev/null || true
+          }
+          cd dist && zip -ry "${dirName}.zip" "$(ls | head -1)"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-${{ matrix.os_name }}
+          path: |
+            aseprite/dist/*.zip
+            aseprite/dist/*.tar.gz
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: aseprite-*
+          merge-multiple: true
+
+      - name: 创建 Release 并上传
+        uses: ncipollo/release-action@v1
+        with:
+          tag: build-${{ github.run_number }}
+          name: "Aseprite 自动构建 #${{ github.run_number }}"
+          artifacts: "aseprite-*.*"
+          allowUpdates: true
+          replacesArtifacts: true
+          token: ${{ secrets.GITHUB_TOKEN }}
