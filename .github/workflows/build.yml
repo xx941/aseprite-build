@@ -11,9 +11,6 @@ on:
   schedule:
     - cron: '0 0 1 * *'
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     strategy:
@@ -28,7 +25,7 @@ jobs:
             os_name: linux64
             skia_arch: x64
             laf_backend: skia_x11
-          - os: macos-14
+          - os: macos-latest
             os_name: macos-arm64
             skia_arch: arm64
             laf_backend: skia_metal
@@ -39,13 +36,14 @@ jobs:
         shell: bash
 
     steps:
-      - name: 检出 Aseprite 源码
+      - name: 检出本仓库 (含工作流文件)
         uses: actions/checkout@v4
-        with:
-          repository: aseprite/aseprite
-          ref: ${{ github.event.inputs.aseprite_ref || 'main' }}
-          path: aseprite
-          submodules: recursive
+
+      - name: 克隆 Aseprite 源码 (含子模块)
+        run: |
+          git clone https://github.com/aseprite/aseprite.git aseprite \
+            --branch ${{ github.event.inputs.aseprite_ref || 'main' }} \
+            --recursive --depth 1
 
       - name: 安装依赖 (Linux)
         if: runner.os == 'Linux'
@@ -143,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aseprite-${{ matrix.os_name }}
-          path: aseprite/build/*.zip
+          path: aseprite/build/*.zip aseprite/build/*.tar.gz
           if-no-files-found: warn
 
   release:
